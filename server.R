@@ -3,98 +3,101 @@ library(leaflet)
 library(sp)
 library(maptools)
 
-ch <- readShapePoly("trt10_churning_selected")
-dfch <- data.frame(ch)
-city <- read.csv("city_churn_fast.csv")
+sub <- readShapePoly("subctr60")
+dfsub <- data.frame(sub)
+dfsub[dfsub==0] = NA
+zips <- read.csv("ZIP_centroids.csv")
+
+sub97 <- readShapePoly("centers97")
+sub14 <- readShapePoly("centers14")
+
 
 shinyServer(function(input, output) {
-  
+
   # Grab ZIP code input
-  center <- reactiveValues(xcoord=-117.7736, ycoord=33.67801)
+  center <- reactiveValues(xcoord=-118.239, ycoord=34.06583)
   observeEvent(input$recenter, {
-    center$xcoord = city$x_centr[city$NAME10==input$cent]
-    center$ycoord = city$y_centr[city$NAME10==input$cent]
-  })
- 
-  # Grab Inputs - ALL
-  options = reactiveValues(choose="ones")
-  observeEvent(input$empgo, {
-    emplink = switch(input$emp, "Employment in 1997"="1997", "Employment in 2000"="2000", "Employment in 2012"="12",  
-                     "Employment in 2014"="14", "Employment Growth, 1997-2014"="9714", "Employment Growth, 2000-2012"="0012")
-    options$choose = paste("totemp", emplink, sep="")
-  })
-  observeEvent(input$churngo, {
-    churnlink = switch(input$churn, "Churning, 1997-2014"="9714", "Churning, 2000-2012"="0012")
-    options$choose = paste("churn", churnlink, sep="")
-  })
-  observeEvent(input$clustgo, {
-    clustlink = switch(input$clust, "Churning-derived Clusters"="fac2", "Spatially-derived Clusters"="LISA2")
-    options$choose = paste("clust", clustlink, sep="")
-  })
-  observeEvent(input$growgo, {
-    growlink = switch(input$grow, "Churning and Income Growth"="inc", "Churning and Job Growth"="job", "Churning and Home Value Growth"="hov")
-    options$choose = paste("grow", growlink, sep="")
-  })
-  observeEvent(input$clear, {
-    options$choose = "ones"
+    center$xcoord = zips$x_centr[zips$CODE==input$zip]
+    center$ycoord = zips$y_centr[zips$CODE==input$zip]
   })
   
-  # Reactive function to generate a color palette based on the variable chosen
-  colorpal <- reactive({
-    datause = dfch[,grep(options$choose, colnames(dfch))]
-    if(input$analysis == 3 | input$analysis == 5){colorpal <- colorFactor("RdYlBu", datause, na.color="#FFFFFF")}
-    else if(input$analysis == 4) {colorpal <- colorBin("RdYlBu", datause, bins=c(-1, -0.2, -0.1, 0, 0.1, 0.2, 1), na.color="#B0171F")}
-    else if(input$analysis == 2){colorpal <- colorBin("Blues", datause, bins=5, na.color="#B0171F")}
-    else if(input$analysis == 1 & (input$emp == "Employment Growth, 2000-2012" | input$emp == "Employment Growth, 1997-2014")) {colorpal <- colorBin("RdYlBu", datause, bins=c(-55000,-2000,-500,0,500,2000,70000), na.color="#FFFFFF")}
-    else {colorpal <- colorBin("Blues", datause, bins=c(0,750,2000,5000,15000,100000), na.color="#FFFFFF")}
+  # Grab Inputs 
+  options = reactiveValues(choose="Em_all_14")
+  observeEvent(input$csgo, {
+    type_link = switch(input$cstype, "Highest Category"="_max_", "Total"="_all_", "KIBS"="_kibs_",
+                       "Creative Class"="_crtv_", "Retail"="_ret_", "High Tech"="_tech_", "Industrial"="_ind_")
+    
+    options$choose = paste(substr(input$cstopic,1,2), type_link, substr(input$year,3,4), sep="")
+  })
+
+  # Grab whether qual or quant
+  options2 = reactiveValues(choose="quant")
+  observeEvent(input$csgo, {
+    link = switch(input$cstype, "Highest Category"="qual", "Total"="quant", "KIBS"="quant",
+                       "Creative Class"="quant", "Retail"="quant", "High Tech"="quant", "Industrial"="quant")
+    options2$choose = link
   })
   
-  # Generate the basemap
-  output$map <- renderLeaflet({
-    leaflet(ch) %>% setView(lng=center$xcoord, lat=center$ycoord , zoom=10) %>% addTiles()
+  finalMap <- reactive ({
+    choice = dfsub[,grep(options$choose, colnames(dfsub))]
+    if(options2$choose=="qual"){pal <- colorFactor("RdYlBu", choice, na.color="#FFFFFF")} 
+      else {pal <- colorNumeric("Blues", choice, na.color="#B0171F")}
+    
+    # Create map 
+    m = leaflet(sub) %>%  setView(lng=center$xcoord, lat=center$ycoord , zoom=10) %>% addTiles() %>%
+    addPolygons(data=sub, stroke=T, weight=1.5, fillColor = ~pal(choice), color="black", fillOpacity=0.6, 
+                opacity=1, popup=~subctrNAME, group="View Data") %>%
+    addLegend("bottomleft", pal=pal, values=~choice, opacity=0.75, na.label=~paste('Not a subcenter in', input$year),
+              title=~paste(input$year, input$cstype, input$cstopic, sep=" ")) %>%
+    addPolygons(data=sub97, stroke=T, weight=1.5, color="black", fillColor="dodgerblue", fillOpacity=0.5, group="View Changes") %>%
+    addPolygons(data=sub14, stroke=T, weight=1.5, color="black", fillColor="yellow", fillOpacity=0.5, group="View Changes") %>%
+    addLayersControl(
+      baseGroups = c("View Data", "View Changes"),
+      options = layersControlOptions(collapsed = FALSE))
   })
   
-  # Observe function to add polygons and legend to basemap based on color palette 
-  observe({
-    pal <- colorpal()
-    datause <- dfch[,grep(options$choose, colnames(dfch))]
-    lab <- switch(options$choose, 'ones'=' ','totemp1997'='Employment in 1997', 'totemp2000'='Employment in 2000', 'totemp12'='Employment in 2012', 'totemp14'='Employment in 2014', 'totemp9714'='Employment Growth, 1997-2014', 'totemp0012'='Employment Growth, 2000-2012', 'growjob'='Churning and Job Growth', 'growhov'='Churning and Home Value Growth', 'growinc'='Churning and Income Growth', 'clustfac2'='Churning-derived Clusters', 'clustLISA2'='Spatially-derived Clusters', 'churn0012'='Churning, 2000-2012', 'churn9714'='Churning, 1997-2014')
-    leafletProxy("map") %>% clearControls() %>% clearShapes() %>% 
-      addPolygons(data=ch, stroke=T, weight=1, fillColor = ~pal(datause), color="black",
-                  fillOpacity=0.6, opacity=1, popup=~NAME10) %>%
-      addLegend("bottomleft", pal=pal, values=datause, opacity=0.75, title=lab)
-    })
+  # Generate Map Output
+  output$myMap = renderLeaflet(finalMap())
   
   # Generate Histogram
-    output$hist <- renderPlot({
-      if(input$analysis == 5 | input$analysis == 3){return(NULL)}   else{ 
-        par(mar=c(2.5,4,4,2))
-        par(oma=c(1.5,0,0,0))
-        datause <- city[,grep(options$choose, colnames(city))]
-        datause[is.na(datause)] = 0
-        lab <- switch(options$choose, 'ones'=' ','totemp1997'='Employment in 1997', 'totemp2000'='Employment in 2000', 'totemp12'='Employment in 2012', 'totemp14'='Employment in 2014', 'totemp9714'='Employment Growth, 1997-2014', 'totemp0012'='Employment Growth, 2000-2012', 'growjob'='Churning and Job Growth', 'growhov'='Churning and Home Value Growth', 'growinc'='Churning and Income Growth', 'clustfac2'='Churning-derived Clusters', 'clustLISA2'='Spatially-derived Clusters', 'churn0012'='Churning, 2000-2012', 'churn9714'='Churning, 1997-2014')
-        q2 = as.numeric(quantile(datause, 0.02))
-        q98 = as.numeric(quantile(datause, 0.98))
-        hist(datause, xlab=NULL, col="dodgerblue", breaks=((max(datause)-min(datause))/(q98-q2))*12, xlim=c(q2, q98),
-             ylab="# of SoCal Cities", border="white", main=lab)
-        legend("topright", c(input$city), lwd=2, box.col="white")
-        abline(v=mean(datause, na.rm=T), lty=2)
-        legend("topright", c(input$city, "Avg"), lwd=c(2,1), lty=c(1,2), box.col="white")
-        abline(v=city[,grep(options$choose, colnames(city))][city$NAME10==input$city], lwd=2)
-        mtext("Values shown are for all census tracts within each city.", side=1, cex=0.85, font=3, outer=TRUE)
-        }
-    })
+  observeEvent(input$csgo, {
+  output$hist <- renderPlot({
+    if(options2$choose=="qual"){return(NULL)}   else{ 
+    data = dfsub[,grep(options$choose, colnames(dfsub))]
+    if(input$year == '1997'){ctrselect <- input$ctr97} else {ctrselect <- input$ctr14}
+    hist(data, xlab=NULL, breaks=12, col="dodgerblue",
+         ylab="# of Subcenters", border="white", main=paste(input$year, input$cstype, input$cstopic, sep=" "))
+    legend("topright", c(ctrselect), lwd=2, box.col="white")
+    if(input$cstopic=="Specialization"){
+      abline(v=1, lty=2)
+      legend("topright", c(ctrselect, "1.0"), lwd=c(2,1), lty=c(1,2), box.col="white")}
+    if(input$cstopic=="Employment"){
+      abline(v=mean(data, na.rm=T), lty=2)
+      legend("topright", c(ctrselect, "Subctr Avg"), lwd=c(2,1), lty=c(1,2), box.col="white")}
+    abline(v=dfsub[,grep(options$choose, colnames(dfsub))][dfsub$subctrNAME==ctrselect], lwd=2) }
+  })
+  })
 
-  # Add Descriptions
+  # Add Topic Descriptions
   output$var_desc <- renderText({
-    data_notes = switch(input$analysis,
-                        "1" = "Employment is derived from ReferenceUSA and shows the number of jobs in each tract. Employment growth shows the net increase/decrease in job count per tract (not a percent).",
-                        "2" = "Churning is calculated as the (annualized) sum of business establishment births and deaths divided by total employment. It is a measure of local economic turnover.",
-                        "3" = "Churning-derived clusters are 6 distinct groupings of tracts with similar business dynamics. Spatial-derived clusters are hotspots where nearby tracts display similar levels of churn.",
-                        "4" = "These are results from a geographically-weighted regression showing how the relationship between churning and growth varies over space. A positive value (blue) indicates where more churning is associated with growth and a negative value (red) indicates where more churning is associated with decline.")
-    paste("-- ", data_notes, sep="")
+    data_notes = switch(input$cstopic,
+                       "Employment" = "is the total number of employees in the subcenter.",
+                       "Specialization"= "displays the selected category's location quotient in each subcenter. A value above 1 indicates a high concentration of that industry relative to the whole region.")
+    paste("-- ", input$cstopic, data_notes, sep=" ")
   })
   
+  # Add Variable Description
+  output$var_desc2 <- renderText({
+    data_notes = switch(input$cstype,
+                        "High Tech" = "spans several industries and includes tech manufacturing.",
+                        "KIBS"= "stands for Knowledge-Intensive Business Services.",
+                        "Creative Class" = "employment consists of arts, entertainment, recreation, and information.",
+                        "Retail" = "selected.",
+                        "Industrial" = "includes manufacturing and utilities.",
+                        "Total" = "cannot be selected for SPECIALIZATION",
+                        "Highest Category"= "is the industry (of the 5 options shown) with the highest employment or location quotient in each subcenter.")
+    paste("-- ", input$cstype, data_notes, sep=" ")
+  })
   
- 
 })
+
